@@ -44,8 +44,6 @@ def recibir_datos():
         return jsonify({"error": "No se recibieron datos"}), 400
 
     print("📡 Datos recibidos del ESP32:", data)
-
-    # Aquí puedes procesar, guardar o enviar los datos a la IA
     return jsonify({"status": "OK", "mensaje": "Datos recibidos correctamente"}), 200
 
 # --- Iniciar servidor localmente ---
