@@ -36,7 +36,18 @@ def consultar_ia():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- Ruta para datos del ESP32 ---
+# --- Ruta para recibir datos del ESP32 ---
 @app.route('/sensores', methods=['POST'])
 def recibir_datos():
-    data = request.get_js_
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No se recibieron datos"}), 400
+
+    print("📡 Datos recibidos del ESP32:", data)
+
+    # Aquí puedes procesar, guardar o enviar los datos a la IA
+    return jsonify({"status": "OK", "mensaje": "Datos recibidos correctamente"}), 200
+
+# --- Iniciar servidor localmente ---
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
