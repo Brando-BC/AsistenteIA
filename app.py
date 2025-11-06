@@ -5,7 +5,7 @@ import time
 app = Flask(__name__)
 CORS(app)
 
-# Base de datos simulada en memoria
+# Almacenamiento temporal de los últimos datos enviados por el ESP32
 datos_esp32 = {}
 ultima_actualizacion = 0
 
@@ -13,7 +13,7 @@ ultima_actualizacion = 0
 def home():
     return "Servidor Asistente IA funcionando ✅"
 
-# 🛰️ Ruta para recibir datos del ESP32
+# 🛰️ Recibir datos del ESP32
 @app.route('/sensores', methods=['POST'])
 def recibir_datos():
     global datos_esp32, ultima_actualizacion
@@ -25,52 +25,62 @@ def recibir_datos():
 
     datos_esp32 = data
     ultima_actualizacion = time.time()
-    return jsonify({"status": "OK", "mensaje": "Datos guardados correctamente"}), 200
+    return jsonify({"status": "OK", "mensaje": "Datos actualizados correctamente"}), 200
 
-# 💬 Ruta de IA (para HTML o ESP32)
+# 💬 Ruta de interacción de voz (HTML)
 @app.route('/ia', methods=['POST'])
 def ia_responder():
-    global datos_esp32
-    mensaje = request.json.get("mensaje", "").lower()
+    global datos_esp32, ultima_actualizacion
+    mensaje = request.json.get("mensaje", "").lower().strip()
 
-    print("💬 Mensaje recibido de IA:", mensaje)
+    print("💬 Pregunta del usuario:", mensaje)
 
-    # Si han pasado más de 2 minutos sin datos nuevos del ESP32, se limpia
+    # Si han pasado más de 2 minutos sin datos nuevos, se reinicia
     if time.time() - ultima_actualizacion > 120:
         datos_esp32 = {}
 
-    if "signos" in mensaje or "vitales" in mensaje:
+    respuesta = "Disculpa, no entendí bien lo que quisiste decir. ¿Podrías repetirlo?"
+
+    # --- RESPUESTAS MÁS NATURALES ---
+    if "hola" in mensaje:
+        respuesta = "Hola, qué gusto escucharte. ¿Cómo te sientes hoy?"
+
+    elif "signos" in mensaje or "vitales" in mensaje or "salud" in mensaje:
         if datos_esp32:
-            temp = datos_esp32.get("Temp", "N/A")
-            bpm = datos_esp32.get("BPM", "N/A")
-            spo2 = datos_esp32.get("SpO2", "N/A")
+            temp = datos_esp32.get("Temp", 0)
+            bpm = datos_esp32.get("BPM", 0)
+            spo2 = datos_esp32.get("SpO2", 0)
+
+            # Evaluación rápida con tono humano
+            if temp > 37.5:
+                estado = "parece que tienes un poco de fiebre, procura descansar y tomar agua."
+            elif bpm > 100:
+                estado = "tu ritmo cardíaco está algo acelerado, intenta relajarte un poco."
+            elif spo2 < 94:
+                estado = "tu oxígeno está algo bajo, respira profundo o abre una ventana."
+            else:
+                estado = "todo se ve estable, sigue así."
 
             respuesta = (
-                f"📊 Tus signos vitales actuales son:\n"
-                f"• Temperatura: {temp} °C\n"
-                f"• Frecuencia cardíaca: {bpm} BPM\n"
-                f"• Saturación de oxígeno: {spo2}%.\n"
+                f"Tu temperatura es de {temp} grados, tu pulso está en {bpm} latidos por minuto "
+                f"y tu oxígeno en {spo2} por ciento. En resumen, {estado}"
             )
-
-            # Diagnóstico básico
-            if temp > 37.5:
-                respuesta += "🌡️ Tienes fiebre, cuídate y mantente hidratado."
-            elif bpm > 100:
-                respuesta += "❤️ Tu frecuencia cardíaca está un poco alta, intenta relajarte."
-            elif spo2 < 94:
-                respuesta += "🫁 Saturación baja, procura respirar aire fresco."
-            else:
-                respuesta += "✅ Todos los valores se encuentran dentro de lo normal."
         else:
             respuesta = (
-                "⚠️ Aún no tengo datos de tus sensores. "
-                "Por favor, asegúrate de que el ESP32 esté enviando correctamente."
+                "Aún no tengo tus datos de salud actualizados. "
+                "Asegúrate de que el dispositivo esté enviando los signos vitales."
             )
+
+    elif "gracias" in mensaje:
+        respuesta = "De nada, siempre estoy aquí para ayudarte."
+
+    elif "adiós" in mensaje or "chau" in mensaje:
+        respuesta = "Hasta luego, cuídate mucho."
 
     else:
         respuesta = (
-            "Hola 👋 Soy tu asistente de salud. "
-            "Puedes preguntarme cosas como: '¿Cuáles son mis signos vitales actuales?'"
+            "Puedo decirte tus signos vitales, o explicarte si están bien o no. "
+            "¿Quieres que revise cómo estás ahora?"
         )
 
     return jsonify({"respuesta": respuesta})
