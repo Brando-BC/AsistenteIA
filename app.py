@@ -1,67 +1,79 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from dotenv import load_dotenv
-from openai import OpenAI
-import os
-
-# --- Configuración ---
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+import time
 
 app = Flask(__name__)
 CORS(app)
 
-# Variable global para guardar últimos datos del ESP32
+# Base de datos simulada en memoria
 datos_esp32 = {}
+ultima_actualizacion = 0
 
 @app.route('/')
 def home():
-    return "🤖 Servidor Flask AsistenteIA funcionando correctamente."
+    return "Servidor Asistente IA funcionando ✅"
 
-# --- Ruta para recibir datos del ESP32 ---
+# 🛰️ Ruta para recibir datos del ESP32
 @app.route('/sensores', methods=['POST'])
 def recibir_datos():
-    global datos_esp32
-    data = request.get_json()
+    global datos_esp32, ultima_actualizacion
+    data = request.get_json(force=True)
+    print("📡 Datos recibidos del ESP32:", data)
+
     if not data:
         return jsonify({"error": "No se recibieron datos"}), 400
 
-    datos_esp32 = data  # Guardar los últimos valores recibidos
-    print("📡 Datos recibidos del ESP32:", datos_esp32)
-    return jsonify({"status": "OK", "mensaje": "Datos recibidos correctamente"}), 200
+    datos_esp32 = data
+    ultima_actualizacion = time.time()
+    return jsonify({"status": "OK", "mensaje": "Datos guardados correctamente"}), 200
 
-# --- Ruta para IA (usa datos del ESP32 si existen) ---
+# 💬 Ruta de IA (para HTML o ESP32)
 @app.route('/ia', methods=['POST'])
-def consultar_ia():
+def ia_responder():
     global datos_esp32
-    data = request.get_json()
-    mensaje = data.get('mensaje', '')
+    mensaje = request.json.get("mensaje", "").lower()
 
-    contexto = "Eres un asistente médico inteligente. Analiza signos vitales y posibles anomalías."
+    print("💬 Mensaje recibido de IA:", mensaje)
 
-    # Si hay datos del ESP32 disponibles, se agregan al contexto
-    if datos_esp32:
-        contexto += f"\nLos últimos signos vitales recibidos son: " \
-                    f"Temperatura: {datos_esp32.get('Temp', 'N/A')} °C, " \
-                    f"Frecuencia cardíaca: {datos_esp32.get('BPM', 'N/A')} BPM, " \
-                    f"Saturación de oxígeno: {datos_esp32.get('SpO2', 'N/A')}%, " \
-                    f"Acelerómetro: ({datos_esp32.get('MPU_ax', 0)}, {datos_esp32.get('MPU_ay', 0)}, {datos_esp32.get('MPU_az', 0)})."
+    # Si han pasado más de 2 minutos sin datos nuevos del ESP32, se limpia
+    if time.time() - ultima_actualizacion > 120:
+        datos_esp32 = {}
+
+    if "signos" in mensaje or "vitales" in mensaje:
+        if datos_esp32:
+            temp = datos_esp32.get("Temp", "N/A")
+            bpm = datos_esp32.get("BPM", "N/A")
+            spo2 = datos_esp32.get("SpO2", "N/A")
+
+            respuesta = (
+                f"📊 Tus signos vitales actuales son:\n"
+                f"• Temperatura: {temp} °C\n"
+                f"• Frecuencia cardíaca: {bpm} BPM\n"
+                f"• Saturación de oxígeno: {spo2}%.\n"
+            )
+
+            # Diagnóstico básico
+            if temp > 37.5:
+                respuesta += "🌡️ Tienes fiebre, cuídate y mantente hidratado."
+            elif bpm > 100:
+                respuesta += "❤️ Tu frecuencia cardíaca está un poco alta, intenta relajarte."
+            elif spo2 < 94:
+                respuesta += "🫁 Saturación baja, procura respirar aire fresco."
+            else:
+                respuesta += "✅ Todos los valores se encuentran dentro de lo normal."
+        else:
+            respuesta = (
+                "⚠️ Aún no tengo datos de tus sensores. "
+                "Por favor, asegúrate de que el ESP32 esté enviando correctamente."
+            )
+
     else:
-        contexto += "\nAún no se han recibido datos de sensores del ESP32."
-
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": contexto},
-                {"role": "user", "content": mensaje}
-            ]
+        respuesta = (
+            "Hola 👋 Soy tu asistente de salud. "
+            "Puedes preguntarme cosas como: '¿Cuáles son mis signos vitales actuales?'"
         )
-        respuesta = completion.choices[0].message.content
-        return jsonify({"respuesta": respuesta})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"respuesta": respuesta})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=10000)
