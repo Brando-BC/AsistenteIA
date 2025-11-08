@@ -2,13 +2,13 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import time
 import os
-import openai  # Asegúrate de instalarlo: pip install openai
+from openai import OpenAI  # Nueva forma correcta
 
 app = Flask(__name__)
 CORS(app)
 
 # --- API KEY de OpenAI ---
-openai.api_key = os.getenv("OPENAI_API_KEY")  # o pon tu clave directamente si estás en entorno local
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- Variables globales ---
 datos_esp32 = {}
@@ -82,15 +82,17 @@ def ia_responder():
             f"Pregunta del usuario: {mensaje}"
         )
 
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",  # modelo ligero, rápido y económico
-            messages=[{"role": "system", "content": "Eres un asistente conversacional inteligente y empático."},
-                      {"role": "user", "content": prompt}],
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Eres un asistente conversacional inteligente y empático."},
+                {"role": "user", "content": prompt}
+            ],
             max_tokens=300,
             temperature=0.7
         )
 
-        respuesta = response.choices[0].message["content"].strip()
+        respuesta = response.choices[0].message.content.strip()
         return jsonify({"respuesta": respuesta})
 
     except Exception as e:
