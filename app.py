@@ -1,104 +1,136 @@
-from flask import Flask, request, jsonify
+from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
-import time
 import os
-from openai import OpenAI  # Nueva forma correcta
+from datetime import datetime
+from openai import OpenAI
+import firebase_admin
+from firebase_admin import credentials, db
 
+# ------------------------------------------------------------
+# CONFIGURACIÓN DE FLASK
+# ------------------------------------------------------------
 app = Flask(__name__)
 CORS(app)
 
-# --- API KEY de OpenAI ---
+# ------------------------------------------------------------
+# CONFIGURACIÓN DE FIREBASE
+# ------------------------------------------------------------
+firebase_key_path = "firebase-key.json"
+if os.path.exists(firebase_key_path):
+    cred = credentials.Certificate(firebase_key_path)
+    firebase_admin.initialize_app(cred, {
+        "databaseURL": "https://asistente-signos-vitales-default-rtdb.firebaseio.com/"
+    })
+else:
+    print("⚠️ Advertencia: No se encontró firebase-key.json. El guardado en Firebase no funcionará.")
+
+# ------------------------------------------------------------
+# CONFIGURACIÓN DE OPENAI
+# ------------------------------------------------------------
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- Variables globales ---
-datos_esp32 = {}
-ultima_actualizacion = 0
+# ------------------------------------------------------------
+# PARÁMETROS NORMALES (fuente: OMS, NIH, Mayo Clinic)
+# ------------------------------------------------------------
+parametros_normales = {
+    "temperatura": (36.1, 37.2),  # °C
+    "frecuencia_cardiaca": (60, 100),  # lpm
+    "spo2": (95, 100),  # %
+    "presion_sistolica": (90, 120),  # mmHg
+    "presion_diastolica": (60, 80)   # mmHg
+}
 
+# ------------------------------------------------------------
+# RUTA PRINCIPAL
+# ------------------------------------------------------------
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-@app.route('/')
-def home():
-    return "🤖 Servidor Asistente Inteligente con ESP32 activo"
-
-
-# 🛰️ Recibe datos del ESP32
-@app.route('/sensores', methods=['POST'])
+# ------------------------------------------------------------
+# RECIBIR DATOS DEL ESP32 Y GUARDAR EN FIREBASE
+# ------------------------------------------------------------
+@app.route("/sensores", methods=["POST"])
 def recibir_datos():
-    global datos_esp32, ultima_actualizacion
-    data = request.get_json(force=True)
-    print("📡 Datos recibidos del ESP32:", data)
-
-    if not data:
-        return jsonify({"error": "No se recibieron datos"}), 400
-
-    datos_esp32 = data
-    ultima_actualizacion = time.time()
-    return jsonify({"status": "OK", "mensaje": "Datos de salud actualizados correctamente"}), 200
-
-
-# 💬 Ruta principal para responder preguntas desde el HTML
-@app.route('/ia', methods=['POST'])
-def ia_responder():
-    global datos_esp32, ultima_actualizacion
-    mensaje = request.json.get("mensaje", "").lower().strip()
-    print("💬 Usuario:", mensaje)
-
-    # Si han pasado más de 2 minutos sin datos, reiniciar
-    if time.time() - ultima_actualizacion > 120:
-        datos_esp32 = {}
-
-    # --- Detección de tema de salud ---
-    temas_salud = ["salud", "signos", "vitales", "presión", "oxígeno", "temperatura", "bienestar", "cansado", "fatiga", "pulso", "bpm", "spo2", "fiebre"]
-    es_salud = any(palabra in mensaje for palabra in temas_salud)
-
-    if es_salud and datos_esp32:
-        temp = datos_esp32.get("Temp", 0)
-        bpm = datos_esp32.get("BPM", 0)
-        spo2 = datos_esp32.get("SpO2", 0)
-
-        estado = ""
-        if temp > 37.5:
-            estado = "parece que tienes un poco de fiebre. Procura descansar y mantenerte hidratado."
-        elif bpm > 100:
-            estado = "tu ritmo cardíaco está algo elevado. Intenta respirar profundo o relajarte un poco."
-        elif spo2 < 94:
-            estado = "tu nivel de oxígeno está algo bajo. Respira profundo o sal a tomar aire fresco."
-        else:
-            estado = "todo parece estable. Sigue cuidándote."
-
-        respuesta = (
-            f"Tu temperatura es de {temp} grados, tu pulso está en {bpm} latidos por minuto "
-            f"y tu nivel de oxígeno es de {spo2} por ciento. En general, {estado}"
-        )
-        return jsonify({"respuesta": respuesta})
-
-    elif es_salud and not datos_esp32:
-        return jsonify({"respuesta": "No tengo tus datos de salud actualizados. Asegúrate de que el ESP32 esté enviando información."})
-
-    # --- Para todo lo demás: usar IA general ---
     try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No se recibieron datos"}), 400
+
+        data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if firebase_admin._apps:
+            ref = db.reference("signos_vitales")
+            ref.push(data)
+            print("📡 Datos guardados en Firebase:", data)
+        else:
+            print("⚠️ Firebase no inicializado, datos no guardados:", data)
+
+        return jsonify({"status": "ok", "mensaje": "Datos recibidos y guardados correctamente"}), 200
+    except Exception as e:
+        print("⚠️ Error:", e)
+        return jsonify({"error": str(e)}), 500
+
+# ------------------------------------------------------------
+# CONSULTAR ÚLTIMO DATO
+# ------------------------------------------------------------
+@app.route("/ultimo", methods=["GET"])
+def obtener_ultimo():
+    try:
+        if not firebase_admin._apps:
+            return jsonify({"error": "Firebase no está inicializado"}), 500
+
+        ref = db.reference("signos_vitales")
+        data = ref.order_by_key().limit_to_last(1).get()
+        if data:
+            ultimo = list(data.values())[0]
+            return jsonify(ultimo)
+        else:
+            return jsonify({"mensaje": "No hay datos en Firebase"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ------------------------------------------------------------
+# CHAT CON IA
+# ------------------------------------------------------------
+@app.route("/ia", methods=["POST"])
+def ia_responder():
+    try:
+        mensaje = request.json.get("mensaje", "").strip()
+        if not mensaje:
+            return jsonify({"respuesta": "No se recibió ningún mensaje"}), 400
+
+        # Crear contexto médico para la IA
         prompt = (
-            f"Eres un asistente amable y útil llamado Brani. "
-            f"Responde de forma natural, clara y sin tecnicismos. "
-            f"Pregunta del usuario: {mensaje}"
+            "Eres un asistente médico llamado Brani. Analiza los signos vitales con empatía y claridad. "
+            "Parámetros normales: "
+            f"Temperatura {parametros_normales['temperatura']}°C, "
+            f"Frecuencia cardíaca {parametros_normales['frecuencia_cardiaca']} lpm, "
+            f"Saturación {parametros_normales['spo2']}%, "
+            f"Presión arterial {parametros_normales['presion_sistolica']}/{parametros_normales['presion_diastolica']} mmHg. "
+            f"Consulta: {mensaje}"
         )
 
-        response = client.chat.completions.create(
+        completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Eres un asistente conversacional inteligente y empático."},
+                {"role": "system", "content": "Eres un asistente médico conversacional, empático y experto en salud básica."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=300,
-            temperature=0.7
+            temperature=0.6,
+            max_tokens=250
         )
 
-        respuesta = response.choices[0].message.content.strip()
+        respuesta = completion.choices[0].message.content.strip()
         return jsonify({"respuesta": respuesta})
 
     except Exception as e:
-        print("⚠️ Error con OpenAI:", e)
-        return jsonify({"respuesta": "Hubo un problema al generar la respuesta de la IA."})
+        print("⚠️ Error con IA:", e)
+        return jsonify({"respuesta": "Ocurrió un error al procesar la respuesta de la IA."})
 
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+# ------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
