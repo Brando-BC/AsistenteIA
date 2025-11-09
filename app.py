@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import os
+import json
 from datetime import datetime
 from openai import OpenAI
 import firebase_admin
@@ -13,16 +14,30 @@ app = Flask(__name__)
 CORS(app)
 
 # ------------------------------------------------------------
-# CONFIGURACIÓN DE FIREBASE
+# CONFIGURACIÓN DE FIREBASE (Local o Render)
 # ------------------------------------------------------------
-firebase_key_path = "firebase-key.json"
-if os.path.exists(firebase_key_path):
-    cred = credentials.Certificate(firebase_key_path)
-    firebase_admin.initialize_app(cred, {
-        "databaseURL": "https://asistente-signos-vitales-default-rtdb.firebaseio.com/"
-    })
+if os.getenv("FIREBASE_KEY"):
+    # 🔒 En Render (variable de entorno FIREBASE_KEY)
+    try:
+        cred_data = json.loads(os.getenv("FIREBASE_KEY"))
+        cred = credentials.Certificate(cred_data)
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": "https://asistente-signos-vitales-default-rtdb.firebaseio.com/"
+        })
+        print("✅ Firebase inicializado desde variable de entorno")
+    except Exception as e:
+        print("⚠️ Error al inicializar Firebase desde variable de entorno:", e)
 else:
-    print("⚠️ Advertencia: No se encontró firebase-key.json. El guardado en Firebase no funcionará.")
+    # 💻 En entorno local con archivo firebase-key.json
+    firebase_key_path = "firebase-key.json"
+    if os.path.exists(firebase_key_path):
+        cred = credentials.Certificate(firebase_key_path)
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": "https://asistente-signos-vitales-default-rtdb.firebaseio.com/"
+        })
+        print("✅ Firebase inicializado desde firebase-key.json")
+    else:
+        print("⚠️ Advertencia: No se encontró firebase-key.json ni FIREBASE_KEY. Firebase no se inicializará.")
 
 # ------------------------------------------------------------
 # CONFIGURACIÓN DE OPENAI
@@ -72,7 +87,7 @@ def recibir_datos():
         return jsonify({"error": str(e)}), 500
 
 # ------------------------------------------------------------
-# CONSULTAR ÚLTIMO DATO
+# CONSULTAR ÚLTIMO DATO DE FIREBASE
 # ------------------------------------------------------------
 @app.route("/ultimo", methods=["GET"])
 def obtener_ultimo():
@@ -100,15 +115,17 @@ def ia_responder():
         if not mensaje:
             return jsonify({"respuesta": "No se recibió ningún mensaje"}), 400
 
-        # Crear contexto médico para la IA
+        # 🧠 Contexto médico con rangos normales
         prompt = (
-            "Eres un asistente médico llamado Brani. Analiza los signos vitales con empatía y claridad. "
-            "Parámetros normales: "
-            f"Temperatura {parametros_normales['temperatura']}°C, "
-            f"Frecuencia cardíaca {parametros_normales['frecuencia_cardiaca']} lpm, "
-            f"Saturación {parametros_normales['spo2']}%, "
-            f"Presión arterial {parametros_normales['presion_sistolica']}/{parametros_normales['presion_diastolica']} mmHg. "
-            f"Consulta: {mensaje}"
+            "Eres un asistente médico llamado BROCK. Analiza los signos vitales del usuario "
+            "con empatía y precisión. Usa los siguientes parámetros normales como referencia "
+            "para tus evaluaciones:\n"
+            f"- Temperatura: {parametros_normales['temperatura'][0]}°C a {parametros_normales['temperatura'][1]}°C\n"
+            f"- Frecuencia cardíaca: {parametros_normales['frecuencia_cardiaca'][0]} a {parametros_normales['frecuencia_cardiaca'][1]} lpm\n"
+            f"- Saturación de oxígeno (SpO2): {parametros_normales['spo2'][0]}% a {parametros_normales['spo2'][1]}%\n"
+            f"- Presión arterial: {parametros_normales['presion_sistolica'][0]}/{parametros_normales['presion_diastolica'][0]} "
+            f"a {parametros_normales['presion_sistolica'][1]}/{parametros_normales['presion_diastolica'][1]} mmHg\n\n"
+            f"Consulta del usuario: {mensaje}"
         )
 
         completion = client.chat.completions.create(
@@ -118,7 +135,7 @@ def ia_responder():
                 {"role": "user", "content": prompt}
             ],
             temperature=0.6,
-            max_tokens=250
+            max_tokens=300
         )
 
         respuesta = completion.choices[0].message.content.strip()
