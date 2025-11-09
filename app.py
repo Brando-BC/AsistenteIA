@@ -14,30 +14,22 @@ app = Flask(__name__)
 CORS(app)
 
 # ------------------------------------------------------------
-# CONFIGURACIÓN DE FIREBASE (Local o Render)
+# CONFIGURACIÓN DE FIREBASE (usando variable de entorno segura)
 # ------------------------------------------------------------
-if os.getenv("FIREBASE_KEY"):
-    # 🔒 En Render (variable de entorno FIREBASE_KEY)
+firebase_key_env = os.getenv("FIREBASE_KEY")
+
+if firebase_key_env:
     try:
-        cred_data = json.loads(os.getenv("FIREBASE_KEY"))
+        cred_data = json.loads(firebase_key_env)
         cred = credentials.Certificate(cred_data)
         firebase_admin.initialize_app(cred, {
             "databaseURL": "https://asistente-signos-vitales-default-rtdb.firebaseio.com/"
         })
-        print("✅ Firebase inicializado desde variable de entorno")
+        print("✅ Firebase inicializado correctamente con variable de entorno.")
     except Exception as e:
-        print("⚠️ Error al inicializar Firebase desde variable de entorno:", e)
+        print("⚠️ Error al inicializar Firebase:", e)
 else:
-    # 💻 En entorno local con archivo firebase-key.json
-    firebase_key_path = "firebase-key.json"
-    if os.path.exists(firebase_key_path):
-        cred = credentials.Certificate(firebase_key_path)
-        firebase_admin.initialize_app(cred, {
-            "databaseURL": "https://asistente-signos-vitales-default-rtdb.firebaseio.com/"
-        })
-        print("✅ Firebase inicializado desde firebase-key.json")
-    else:
-        print("⚠️ Advertencia: No se encontró firebase-key.json ni FIREBASE_KEY. Firebase no se inicializará.")
+    print("⚠️ No se encontró la variable FIREBASE_KEY. Firebase no se inicializará.")
 
 # ------------------------------------------------------------
 # CONFIGURACIÓN DE OPENAI
@@ -48,11 +40,11 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # PARÁMETROS NORMALES (fuente: OMS, NIH, Mayo Clinic)
 # ------------------------------------------------------------
 parametros_normales = {
-    "temperatura": (36.1, 37.2),  # °C
-    "frecuencia_cardiaca": (60, 100),  # lpm
-    "spo2": (95, 100),  # %
-    "presion_sistolica": (90, 120),  # mmHg
-    "presion_diastolica": (60, 80)   # mmHg
+    "temperatura": (36.1, 37.2),        # °C
+    "frecuencia_cardiaca": (60, 100),   # lpm
+    "spo2": (95, 100),                  # %
+    "presion_sistolica": (90, 120),     # mmHg
+    "presion_diastolica": (60, 80)      # mmHg
 }
 
 # ------------------------------------------------------------
@@ -72,6 +64,7 @@ def recibir_datos():
         if not data:
             return jsonify({"error": "No se recibieron datos"}), 400
 
+        # Agrega un timestamp a los datos
         data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if firebase_admin._apps:
@@ -87,7 +80,7 @@ def recibir_datos():
         return jsonify({"error": str(e)}), 500
 
 # ------------------------------------------------------------
-# CONSULTAR ÚLTIMO DATO DE FIREBASE
+# CONSULTAR ÚLTIMO DATO REGISTRADO
 # ------------------------------------------------------------
 @app.route("/ultimo", methods=["GET"])
 def obtener_ultimo():
@@ -97,16 +90,18 @@ def obtener_ultimo():
 
         ref = db.reference("signos_vitales")
         data = ref.order_by_key().limit_to_last(1).get()
+
         if data:
             ultimo = list(data.values())[0]
             return jsonify(ultimo)
         else:
             return jsonify({"mensaje": "No hay datos en Firebase"}), 404
     except Exception as e:
+        print("⚠️ Error al obtener datos:", e)
         return jsonify({"error": str(e)}), 500
 
 # ------------------------------------------------------------
-# CHAT CON IA
+# CHAT CON IA MÉDICA
 # ------------------------------------------------------------
 @app.route("/ia", methods=["POST"])
 def ia_responder():
@@ -115,27 +110,26 @@ def ia_responder():
         if not mensaje:
             return jsonify({"respuesta": "No se recibió ningún mensaje"}), 400
 
-        # 🧠 Contexto médico con rangos normales
+        # Crear contexto médico para la IA
         prompt = (
-            "Eres un asistente médico llamado BROCK. Analiza los signos vitales del usuario "
-            "con empatía y precisión. Usa los siguientes parámetros normales como referencia "
-            "para tus evaluaciones:\n"
-            f"- Temperatura: {parametros_normales['temperatura'][0]}°C a {parametros_normales['temperatura'][1]}°C\n"
-            f"- Frecuencia cardíaca: {parametros_normales['frecuencia_cardiaca'][0]} a {parametros_normales['frecuencia_cardiaca'][1]} lpm\n"
-            f"- Saturación de oxígeno (SpO2): {parametros_normales['spo2'][0]}% a {parametros_normales['spo2'][1]}%\n"
-            f"- Presión arterial: {parametros_normales['presion_sistolica'][0]}/{parametros_normales['presion_diastolica'][0]} "
-            f"a {parametros_normales['presion_sistolica'][1]}/{parametros_normales['presion_diastolica'][1]} mmHg\n\n"
+            "Eres un asistente médico llamado Brani. Analiza los signos vitales con empatía, claridad y según estándares médicos confiables. "
+            "Parámetros normales: "
+            f"Temperatura {parametros_normales['temperatura'][0]}-{parametros_normales['temperatura'][1]} °C, "
+            f"Frecuencia cardíaca {parametros_normales['frecuencia_cardiaca'][0]}-{parametros_normales['frecuencia_cardiaca'][1]} lpm, "
+            f"Saturación de oxígeno {parametros_normales['spo2'][0]}-{parametros_normales['spo2'][1]} %, "
+            f"Presión arterial {parametros_normales['presion_sistolica'][0]}/{parametros_normales['presion_diastolica'][0]} "
+            f"a {parametros_normales['presion_sistolica'][1]}/{parametros_normales['presion_diastolica'][1]} mmHg. "
             f"Consulta del usuario: {mensaje}"
         )
 
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Eres un asistente médico conversacional, empático y experto en salud básica."},
+                {"role": "system", "content": "Eres un asistente médico empático, experto en signos vitales, que ofrece consejos generales, nunca diagnósticos clínicos."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.6,
-            max_tokens=300
+            max_tokens=250
         )
 
         respuesta = completion.choices[0].message.content.strip()
